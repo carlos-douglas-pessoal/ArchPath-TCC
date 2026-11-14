@@ -1,0 +1,102 @@
+@startuml
+skinparam classAttributeIconSize 0
+skinparam class {
+    BackgroundColor White
+    ArrowColor Black
+    BorderColor Black
+}
+
+package "Módulo 3: Memória e SO (Event-Driven)" {
+
+    ' === Camada de Saída de Eventos (Event-Driven) ===
+    class EmissorEventos <<PublicadorDeEventos>> {
+        + emitir(jsonPayload: String): void
+    }
+
+    ' === Classes Externas de Conexão (Barramentos) ===
+    class BarramentoMemoria {
+        - taxaTransferencia: int
+        + transmitirParaRAM(dado: DadoSessao): void
+    }
+
+    class BarramentoExpansao {
+        - larguraDeBanda: int
+        - protocoloAtivo: String
+        + transportarParaRede(dado: DadoSessao): void
+    }
+
+    class DadoSessao <<Entidade>> {
+    }
+
+    ' === Software Lógico (Sistema Operacional) ===
+    class GerenciadorMemoria <<Software Lógico>> {
+        - politicaAlocacao: String
+        - memoriaVirtualTotal: int
+        + receberDoBarramento(dado: DadoSessao, via: BarramentoMemoria): void
+        + traduzirEnderecoVirtual(enderecoVirtual: String): String
+        + alocarNoBuffer(dado: DadoSessao): String
+        + tratarExcecaoMemoria(): void
+    }
+
+    class TabelaPaginas {
+        - mapaVirtualFisico: Map<String, String>
+        - limiteEntradas: int
+        - entradasAtuais: int
+        + mapearPagina(virtual: String, fisico: String): void
+        + verificarEstouro(): boolean
+        + simularPageFault(endereco: String): void
+    }
+
+    ' === Hardware Físico (Placa-Mãe e Chips) ===
+    class MemoriaRAM {
+        - capacidadeMaxFisica: int
+        - espacoAlocado: int
+        + particionarEspaco(tamanho: int): void
+        + lerHardware(endereco: String): DadoSessao
+        + escreverHardware(endereco: String, dado: DadoSessao): void
+    }
+
+    class BufferTemporario {
+        - enderecoFisicoInicio: String
+        - enderecoFisicoFim: String
+        - disponivel: boolean
+        + armazenar(dado: DadoSessao): void
+        + extrair(): DadoSessao
+        + limpar(): void
+    }
+
+    class ControladorDMA {
+        - canalAcessoAtivo: int
+        - flagBypassHabilitada: boolean
+        + buscarDoBuffer(buffer: BufferTemporario): DadoSessao
+        + enviarParaExpansao(dado: DadoSessao, via: BarramentoExpansao): void
+    }
+
+    ' === Relacionamentos Estruturais ===
+    ' O Buffer é um espaço físico delimitado dentro da RAM (Composição)
+    MemoriaRAM *-- "1..*" BufferTemporario: "hospeda >"
+    
+    ' O Gerenciador de Memória interage com a Tabela de Páginas e comanda a RAM
+    GerenciadorMemoria --> TabelaPaginas: "consulta e atualiza mapeamento"
+    GerenciadorMemoria --> MemoriaRAM: "gerencia endereçamento físico"
+
+    ' === Fluxo Lógico (A Jornada do Dado na Memória) ===
+    BarramentoMemoria ..> GerenciadorMemoria: "1. entrega pacote da CPU"
+    GerenciadorMemoria ..> BufferTemporario: "2. aloca dado no buffer"
+    ControladorDMA ..> BufferTemporario: "3. busca do buffer (Bypass direto)"
+    ControladorDMA ..> BarramentoExpansao: "4. envia para a Placa de Rede (PCIe)"
+
+    ' === Notificações Assíncronas (Event-Driven) ===
+    ' Os 3 grandes marcos pedagógicos deste módulo disparam eventos
+    GerenciadorMemoria ..> EmissorEventos : "emite(JSON)\napós alocarNoBuffer()"
+    TabelaPaginas ..> EmissorEventos : "emite ERRO / FINALIZADO\nao simularPageFault()"
+    ControladorDMA ..> EmissorEventos : "emite(JSON)\napós buscarDoBuffer()"
+
+    note right of TabelaPaginas
+      O cenário page_fault é fatal nesta versão:
+      ocorre antes da alocação, não há swapping
+      nem eventos DMA/rede subsequentes.
+    end note
+
+}
+@enduml

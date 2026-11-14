@@ -1,0 +1,124 @@
+# Catálogo de eventos SSE e schemas JSON — ArchPath
+
+## 1. Transporte e ordenação
+
+O backend envia eventos unidirecionais ao cliente pelo endpoint `GET /api/simulacao/eventos`, com `Content-Type: text/event-stream`. Comandos permanecem na API REST. Cada frame tem o formato:
+
+```text
+id: <sessao_id>:<sequencia>
+data: <objeto JSON Event>
+
+```
+
+`sessao_id` é um UUID atribuído no início da execução; `sequencia` começa em 1 e cresce estritamente dentro da sessão. O payload JSON também contém `sessao_id`. O cliente deve processar eventos pela ordem de sequência, sem inferir ordem apenas pelo timestamp.
+
+O serviço mantém em memória o histórico da execução atual ou da última concluída até um novo início aceito. Na reconexão, `Last-Event-ID` correspondente à sessão retida retoma após aquele ID. Se o ID for inválido, pertencer a outra sessão ou não puder ser encontrado, o servidor reproduz a sessão retida desde o primeiro evento. O histórico é perdido no reinício do processo. Se não houver sessão/eventos retidos, a conexão permanece aberta até surgir evento ou o cliente desconectar. O cliente pode consultar `GET /api/simulacao/status` para saber se há execução ativa.
+
+Sem `Last-Event-ID` (primeira conexão ou cliente sem cursor), o servidor reproduz a sessão retida desde o primeiro evento e então mantém a conexão aberta para novos eventos.
+
+## 2. Schema JSON unificado
+
+Cada evento representa o snapshot do dado após a ação do componente. O campo `status_fsm` representa o estado após a ação e antes da próxima transição. Por isso, eventos de transição contínua usam `RODANDO`; eventos resultantes de `pause`/`step` usam `PAUSADO`; eventos de conclusão ou falha fatal usam `FINALIZADO`. `AGUARDANDO_STEP` é um estado transitório consultável pela API de status, mas não é publicado como estado de uma transição concluída.
+
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ArchPathEvent",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Timestamp ISO 8601 da ação."
+    },
+    "sessao_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Identificador da execução ao qual o evento pertence."
+    },
+    "status_fsm": {
+      "type": "string",
+      "enum": ["RODANDO", "PAUSADO", "FINALIZADO"]
+    },
+    "modulo_atual": {
+      "type": "string",
+      "description": "Agrupamento arquitetural corrente."
+    },
+    "componente_atual": {
+      "type": "string",
+      "description": "Componente de hardware/software atuante."
+    },
+    "tipo_evento": {
+      "type": "string",
+      "enum": ["TRANSICAO", "ERRO", "FINALIZACAO"]
+    },
+    "acao_executada": {
+      "type": "string",
+      "description": "Ação/transformação realizada."
+    },
+    "estado_do_dado": {
+      "type": "object",
+      "description": "Snapshot do dado após a ação; propriedades específicas variam por componente."
+    }
+  },
+  "required": [
+    "timestamp",
+    "sessao_id",
+    "status_fsm",
+    "modulo_atual",
+    "componente_atual",
+    "tipo_evento",
+    "acao_executada",
+    "estado_do_dado"
+  ]
+}
+```
+
+O ID de sequência é metadado do frame SSE (`id`), não campo JSON. A sequência é única dentro da sessão. Eventos de término são incluídos no histórico antes da liberação dos recursos.
+
+## 3. Exemplos ilustrativos
+
+Os exemplos de estado do dado abaixo ilustram o formato e não obrigam a reproduzir registradores, endereços ou detalhes físicos específicos além dos requisitos do PRD.
+
+### 3.1 Transição de tradução do scancode
+
+O caractere da API é o valor lógico final. A associação a make code set 1 é didática: o driver preserva a caixa recebida sem simular Shift.
+
+```text
+id: 9a6a1d7e-9c30-41e3-a5b6-4e1839a620de:4
+data: {"timestamp":"2026-10-16T11:00:04Z","sessao_id":"9a6a1d7e-9c30-41e3-a5b6-4e1839a620de","status_fsm":"RODANDO","modulo_atual":"Processamento (CPU e SO)","componente_atual":"DriverTecladoOS","tipo_evento":"TRANSICAO","acao_executada":"Scancode traduzido para caractere lógico","estado_do_dado":{"entrada_bruta_hex":"0x1E","mapa_aplicado":"SET1_DIDATICO","saida_traduzida":"A","encoding":"UTF-8"}}
+```
+
+### 3.2 Representação didática de quadro Ethernet
+
+```text
+id: 9a6a1d7e-9c30-41e3-a5b6-4e1839a620de:9
+data: {"timestamp":"2026-10-16T11:00:09Z","sessao_id":"9a6a1d7e-9c30-41e3-a5b6-4e1839a620de","status_fsm":"RODANDO","modulo_atual":"Rede e OSI (Camada 2)","componente_atual":"ControladorMAC","tipo_evento":"TRANSICAO","acao_executada":"Representação pedagógica do encapsulamento em quadro Ethernet","estado_do_dado":{"payload_recebido":"[CABECALHO_IP][DADO_UTF8]","mac_origem":"00:1A:2B:3C:4D:5E","mac_destino":"FF:FF:FF:FF:FF:FF","estrutura_quadro":{"tipo_eth":"0x0800","fcs_crc32":"<valor ilustrativo, não calculado>"}}}
+```
+
+O protocolo fixo da camada de transporte é UDP. Endereços IP/MAC, portas, campos do quadro e CRC são valores pedagógicos fixos/ilustrativos. O simulador não promete transmissão externa nem validade de frame/CRC em uma rede real.
+
+### 3.3 Page Fault fatal
+
+```text
+id: 9a6a1d7e-9c30-41e3-a5b6-4e1839a620de:6
+data: {"timestamp":"2026-10-16T11:00:06Z","sessao_id":"9a6a1d7e-9c30-41e3-a5b6-4e1839a620de","status_fsm":"FINALIZADO","modulo_atual":"Gerenciamento de Memória (SO)","componente_atual":"TabelaPaginas","tipo_evento":"ERRO","acao_executada":"Page Fault fatal; jornada encerrada antes da alocação","estado_do_dado":{"endereco_virtual_solicitado":"0x00400000","status_mapeamento":"FALHA_DE_TRADUCAO","causa_raiz":"Falha didática de tradução de endereço","resultado":"SESSAO_FINALIZADA"}}
+```
+
+O evento não descreve swapping ou retomada. Depois dele, não são emitidos eventos de alocação, DMA ou rede. O servidor libera recursos/lock e retorna a OCIOSO após publicar o evento.
+
+### 3.4 Finalização normal
+
+```text
+id: 9a6a1d7e-9c30-41e3-a5b6-4e1839a620de:12
+data: {"timestamp":"2026-10-16T11:00:12Z","sessao_id":"9a6a1d7e-9c30-41e3-a5b6-4e1839a620de","status_fsm":"FINALIZADO","modulo_atual":"Rede e OSI (Camada 1)","componente_atual":"ControladorPHY","tipo_evento":"FINALIZACAO","acao_executada":"Jornada concluída","estado_do_dado":{"resultado":"SUCESSO"}}
+```
+
+## 4. Relação com a FSM e API
+
+- A FSM aceita `step` somente em PAUSADO. Enquanto executa a transição solicitada, o estado transitório é AGUARDANDO_STEP; o evento de resultado é emitido em PAUSADO, salvo se a transição encerrar a sessão.
+- `pause` termina a transição atual, emite seu evento em PAUSADO e suspende antes da próxima.
+- Page Fault e erro interno irrecuperável emitem evento `ERRO` terminal com status FINALIZADO.
+- Fim normal emite `FINALIZACAO` com status FINALIZADO.
+- Após emissão terminal, os recursos são liberados; `GET /api/simulacao/status` retorna 404/OCIOSO, enquanto o histórico de eventos permanece disponível em memória até novo início aceito.

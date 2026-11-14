@@ -1,0 +1,61 @@
+# Tratamento de erros e concorrência — ArchPath
+
+## 1. Escopo de operação
+
+A primeira versão executa em uma única instância/processo, acessível em localhost ou rede privada confiável. O contexto e o histórico SSE são mantidos em memória. A execução local e os testes usam Docker Compose; o backend deve iniciar com um único processo/worker, inclusive dentro do container. Multi-processo, réplicas, autenticação e exposição pública estão fora do escopo. O servidor não deve ser exposto publicamente sem uma decisão e requisitos de controle de acesso.
+
+## 2. Exclusão mútua e integridade da sessão
+
+O gerenciador mantém no máximo uma sessão ativa. A verificação do estado OCIOSO e a aquisição do lock são atômicas. Comandos que alteram a FSM são serializados no processo e avaliados contra o estado produzido pelo comando anterior. Um início recebido enquanto a sessão está RODANDO, PAUSADO ou AGUARDANDO_STEP recebe HTTP 409 e não altera payload, FSM, histórico de eventos nem lock da sessão ativa.
+
+Um início válido em OCIOSO cria um novo UUID de sessão, zera registradores e buffers simulados, descarta o histórico de eventos da execução anterior e transita para RODANDO. Não há endpoint de kill/reset.
+
+## 3. Guardas de estado e respostas HTTP
+
+| Operação | Estado permitido | Estado/efeito após sucesso | Rejeição |
+|---|---|---|---|
+| `POST /iniciar` | OCIOSO e entrada válida | Cria sessão e inicia RODANDO; HTTP 200. | Payload inválido: 400. Sessão ativa: 409. |
+| `POST /pause` | RODANDO | Completa a transição de componente atual, suspende antes da próxima, retorna PAUSADO; HTTP 200 após a pausa com sessão, sequência e evento confirmado. | Sem sessão ou já PAUSADO: 400. |
+| `POST /resume` | PAUSADO | Libera execução contínua, retorna RODANDO; HTTP 200. | Sem sessão ou já RODANDO: 400. |
+| `POST /step` | PAUSADO | Executa uma transição completa em AGUARDANDO_STEP, publica o resultado e volta a PAUSADO; HTTP 200 após concluir, incluindo sessão, sequência e evento confirmado. | Sem sessão ou estado diferente de PAUSADO: 400. |
+| `GET /status` | Qualquer estado | Consulta sem alterar FSM; HTTP 200 se ativa, inclusive AGUARDANDO_STEP. | Sem execução ativa: HTTP 404 e `estado_fsm: OCIOSO`. |
+
+Mensagens de erro são JSON com o campo `erro`. Rejeições não modificam o contexto nem emitem evento de transição.
+
+## 4. Page Fault e erros internos
+
+O cenário de início `cenario_memoria: "page_fault"` provoca uma falha didática de tradução antes da alocação. Nesta versão, a falha é fatal: não ocorre swapping, retomada, DMA ou encapsulamento posterior. O serviço:
+
+1. cria evento `tipo_evento: ERRO`, `status_fsm: FINALIZADO`;
+2. registra a causa no estado do dado;
+3. publica o evento no histórico SSE;
+4. libera lock e recursos da execução e retorna a OCIOSO.
+
+Uma falha interna irrecuperável do motor ou de um subsistema segue a mesma política terminal, com descrição do componente e causa disponível. Não há política de retry automático nem classificação de erro recuperável nesta versão. Falha de transporte SSE não cancela a simulação.
+
+Se o cenário didático Page Fault ocorrer durante um `step` ou `pause` aceito, o comando é considerado executado e retorna HTTP 200 com `estado_fsm: FINALIZADO` e `resultado: erro`. Se `pause` aguardar a última transição normal da jornada, retorna HTTP 200 com `estado_fsm: FINALIZADO` e `resultado: sucesso`. Se uma falha interna irrecuperável ocorrer enquanto uma operação HTTP aguarda a transição (por exemplo, durante `pause` ou `step`), a chamada retorna HTTP 500 com corpo JSON `{"erro":"Falha interna irrecuperável durante a transição."}` e o evento terminal é publicado. Falhas internas ocorridas durante execução contínua são reportadas pelo evento SSE; `GET /status` retorna 404/OCIOSO após a limpeza.
+
+## 5. Histórico e reconexão SSE
+
+Cada sessão recebe UUID e eventos com sequência crescente. O ID SSE tem formato `<sessao_id>:<sequencia>`. O servidor mantém em memória o histórico da sessão atual ou última concluída até aceitar o próximo início.
+
+- `Last-Event-ID` válido para a sessão retida: reproduzir eventos posteriores ao ID.
+- ID malformado, de outra sessão ou não encontrado: reproduzir a sessão retida desde o primeiro evento.
+- Nenhum histórico retido: manter conexão aberta até novo evento ou desconexão do cliente.
+- Reinício do processo: o histórico é perdido; não há replay persistente.
+
+O cliente pode consultar `GET /api/simulacao/status` para atualizar a apresentação do estado corrente. A ordem de processamento deriva da sequência do evento, não somente do timestamp.
+
+## 6. Integração browser e acesso
+
+O deployment inicial é localhost ou rede privada confiável, sem autenticação. Recomenda-se servir a interface e API na mesma origem. Se o desenvolvimento exigir origens distintas, CORS deve permitir somente a origem explícita do frontend; não usar wildcard. Exposição pública requer especificação e aprovação de autenticação/autorização antes de ser habilitada.
+
+## 7. Limites e garantias
+
+- O lock em memória garante exclusão mútua somente dentro do processo único suportado.
+- Uma implantação com múltiplos workers/instâncias não é coberta; não se deve inferir coordenação distribuída.
+- O Compose de desenvolvimento/teste não deve adicionar banco de dados, broker ou serviço externo: o estado permanece em memória no processo único do backend.
+- O perfil de testes deve executar as verificações automatizadas sem expor endpoints de teste ou enfraquecer as guardas de estado no perfil normal da aplicação.
+- O término normal, Page Fault ou erro interno terminal publica o evento antes de liberar os recursos.
+- O evento de finalização fica no histórico SSE, embora o estado corrente do serviço volte a OCIOSO e status responda 404.
+- Os valores didáticos de memória/rede não representam fidelidade física nem tráfego externo.

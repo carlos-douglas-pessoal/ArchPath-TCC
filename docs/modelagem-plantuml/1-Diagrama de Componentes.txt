@@ -1,0 +1,58 @@
+@startuml
+skinparam componentStyle uml2
+skinparam component {
+    BackgroundColor White
+    BorderColor Black
+    ArrowColor Black
+}
+
+' Alinhamento para facilitar a leitura do fluxo (Esquerda para Direita / Cima para Baixo)
+left to right direction
+
+package "Cliente" {
+    [Frontend Web (React + TypeScript + Vite)] as Frontend
+}
+
+package "Gateway e Controle (Backend)" {
+    [API REST (iniciar, pause, resume, step, status)] as API
+    [Servidor de Eventos SSE\n(text/event-stream + replay em memória)] as SSE
+}
+
+package "Motor de Simulação (Núcleo)" {
+    [Gerenciador de Sessão\n(lock atômico, instância única)] as Manager
+    [Máquina de Estados (FSM)] as FSM
+    
+    package "Subsistemas de Hardware e SO" {
+        [I/O (Nascimento do Dado)] as SubIO
+        [CPU (Processamento)] as SubCPU
+        [Memória (Alocação)] as SubMemoria
+        [Rede (Encapsulamento)] as SubRede
+    }
+}
+
+' ==========================================
+' FLUXO DE COMANDO (Síncrono/HTTP)
+' ==========================================
+Frontend .right.> API : "1. Comandos HTTP\n(POST /iniciar, /pause, /step)"
+API --> Manager : "2. Valida e serializa comandos"
+Manager --> FSM : "3. Altera estado da FSM"
+
+' ==========================================
+' ORQUESTRAÇÃO INTERNA (FSM)
+' ==========================================
+FSM --> SubIO : "4. Libera transição\nde componente"
+FSM --> SubCPU : "4. Libera transição\nde componente"
+FSM --> SubMemoria : "4. Libera transição\nde componente"
+FSM --> SubRede : "4. Libera transição\nde componente"
+
+' ==========================================
+' FLUXO DE EVENTOS (Assíncrono)
+' ==========================================
+SubIO .up.> SSE : "5. Publica evento JSON\ncom ID sequencial"
+SubCPU .up.> SSE : "5. Publica evento JSON\ncom ID sequencial"
+SubMemoria .up.> SSE : "5. Publica evento JSON\ncom ID sequencial"
+SubRede .up.> SSE : "5. Publica evento JSON\ncom ID sequencial"
+
+SSE .left.> Frontend : "6. SSE ordenado\n(replay via Last-Event-ID)"
+
+@enduml

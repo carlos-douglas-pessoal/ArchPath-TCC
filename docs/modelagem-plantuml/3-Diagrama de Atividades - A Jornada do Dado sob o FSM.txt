@@ -1,0 +1,111 @@
+@startuml
+skinparam activity {
+    BackgroundColor White
+    BorderColor Black
+    ArrowColor Black
+}
+skinparam note {
+    BackgroundColor LightYellow
+    BorderColor GoldenRod
+}
+
+start
+
+note right
+  As oito atividades são fases pedagógicas agrupadas.
+  Cada componente dentro de uma fase pode formar uma transição.
+  POST /step executa exatamente uma transição completa de componente,
+  não necessariamente uma fase inteira.
+  Após cada transição, o backend publica evento JSON via SSE
+  com ID <sessao_id>:<sequencia>.
+end note
+
+:1. Nascimento (Teclado)\nCaptura da tecla e geração do Scancode;
+note right
+  **EmissorEventos:** Dispara log assíncrono
+  (Ex: "Ação física capturada. Scancode 0x18 gerado")
+end note
+
+while (Verifica Estado FSM: Pausado?) is (Sim)
+    :Aguardando API (/resume ou /step);
+endwhile (Não)
+
+:2. I/O na Placa-Mãe\nDecodificação dos pulsos e acionamento APIC;
+note right
+  **EmissorEventos:** Dispara log assíncrono
+  (Ex: "Pulsos elétricos decodificados. IRQ levantada")
+end note
+
+while (Verifica Estado FSM: Pausado?) is (Sim)
+    :Aguardando API (/resume ou /step);
+endwhile (Não)
+
+:3. Processamento na CPU\nBusca (Fetch) do dado para os registradores;
+note right
+  **EmissorEventos:** Dispara log assíncrono
+  (Ex: "CPU atendeu IRQ. Dado alocado no registrador")
+end note
+
+while (Verifica Estado FSM: Pausado?) is (Sim)
+    :Aguardando API (/resume ou /step);
+endwhile (Não)
+
+:4. Tradução pelo SO\nDriver aplica mapa e traduz para ASCII/UTF-8;
+note right
+  **EmissorEventos:** Dispara log assíncrono
+  (Ex: "SO assumiu controle. Scancode traduzido para caractere")
+end note
+
+while (Verifica Estado FSM: Pausado?) is (Sim)
+    :Aguardando API (/resume ou /step);
+endwhile (Não)
+
+:5. Memória\nSO traduz endereço virtual e valida mapeamento;
+note right
+  **EmissorEventos:** Dispara log assíncrono
+  (Ex: "Página mapeada. Pacote gravado no endereço físico 0x1A2B")
+end note
+
+if (cenario_memoria == page_fault?) then (Sim)
+  :Emite evento ERRO / FINALIZADO;\nNão aloca no buffer;
+  :Libera lock e recursos;\nRetorna serviço a OCIOSO;
+  stop
+else (normal)
+endif
+
+:Aloca o dado no buffer físico da RAM;
+
+while (Verifica Estado FSM: Pausado?) is (Sim)
+    :Aguardando API (/resume ou /step);
+endwhile (Não)
+
+:6. Bypass do DMA\nLeitura direta da RAM (Acesso Direto à Memória);
+note right
+  **EmissorEventos:** Dispara log assíncrono
+  (Ex: "DMA extraiu pacote via Bypass sem acionar a CPU")
+end note
+
+while (Verifica Estado FSM: Pausado?) is (Sim)
+    :Aguardando API (/resume ou /step);
+endwhile (Não)
+
+:7. Encapsulamento OSI\nPilha L7-L3 (UDP/IP) e representação do Quadro MAC (L2);
+note right
+  **EmissorEventos:** Dispara log assíncrono
+  (Ex: "IPs adicionados. Quadro Ethernet MAC origem/destino formado")
+end note
+
+while (Verifica Estado FSM: Pausado?) is (Sim)
+    :Aguardando API (/resume ou /step);
+endwhile (Não)
+
+:8. Saída Física\nControlador PHY converte bits em sinais analógicos;
+note right
+  **EmissorEventos:** Dispara log assíncrono
+  (Ex: "Conversão L1 concluída. Sinais transmitidos para a rede")
+  Após a conclusão, publica evento FINALIZACAO com status FINALIZADO.
+  Em seguida, libera recursos/lock e retorna o serviço a OCIOSO.
+end note
+
+stop
+@enduml

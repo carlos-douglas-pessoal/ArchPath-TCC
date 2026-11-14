@@ -1,0 +1,18 @@
+FROM mcr.microsoft.com/playwright:v1.55.0-noble
+
+ENV CI=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+WORKDIR /work
+
+COPY --chown=pwuser:pwuser package.json package-lock.json ./
+RUN npm ci
+
+COPY --chown=pwuser:pwuser playwright.config.ts ./
+COPY --chown=pwuser:pwuser e2e ./e2e
+
+RUN chown pwuser:pwuser /work
+
+USER pwuser
+
+CMD ["npm", "run", "test:e2e"]

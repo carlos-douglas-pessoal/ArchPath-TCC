@@ -1,0 +1,123 @@
+@startuml
+skinparam classAttributeIconSize 0
+skinparam class {
+    BackgroundColor White
+    ArrowColor Black
+    BorderColor Black
+}
+
+package "Módulo 1: Periférico e I/O (O Nascimento do Dado - Event-Driven)" {
+
+    ' === Camada de Saída de Eventos (Event-Driven) ===
+    class EmissorEventos <<PublicadorDeEventos>> {
+        + emitir(jsonPayload: String): void
+    }
+
+    class DadoSessao <<Entidade>> {
+        - payloadBruto: String
+        - estadoAtual: String
+        - logTransformacoes: List<String>
+        + DadoSessao(payload: String)
+        + atualizarEstado(novoEstado: String): void
+        + registrarTransformacao(log: String): void
+        + getPayload(): String
+        + getHistorico(): List<String>
+    }
+
+    ' === Classes de Origem Externa (Periférico) ===
+    class MatrizContatos {
+        - linhaAtiva: int
+        - colunaAtiva: int
+        - circuitoFechado: boolean
+        + fecharCircuito(tecla: String): void
+        + gerarVariacaoTensao(): String
+    }
+
+    class MicrocontroladorTeclado {
+        - tabelaScancodes: Map<String, String>
+        + varrerMatriz(): void
+        + gerarScancode(tensao: String): DadoSessao
+        + empacotarUSB(dado: DadoSessao): void
+    }
+
+    class CaboConexao {
+        - protocoloTransmissao: String
+        - pinosAtivos: List<String>
+        + converterParaPulsosDiferenciais(dado: DadoSessao): String
+        + transmitirSinalEletrico(): void
+    }
+
+    ' === Classes de Entrada na Placa-Mãe ===
+    class PortaFisica {
+        - statusConexao: boolean
+        - bufferEletrico: String
+        + receberPulsosEletricos(pulsos: String): void
+        + repassarSinalParaTrilhas(): String
+    }
+
+    class ControladorInterface {
+        - protocoloAtivo: String
+        - flagErro: boolean
+        + decodificarPulsos(sinalBruto: String): void
+        + extrairScancode(): DadoSessao
+    }
+
+    class Chipset {
+        - bufferTemporario: Queue<DadoSessao>
+        - ocupado: boolean
+        + reterDado(dado: DadoSessao): void
+        + acionarAPIC(): void
+        + despacharParaBarramento(): DadoSessao
+    }
+
+    class APIC <<ControladorInterrupcoes>> {
+        - irqAtiva: boolean
+        - prioridade: int
+        + levantarIRQ(): void
+        + aguardarRespostaCPU(): boolean
+        + limparInterrupcao(): void
+    }
+
+    class BarramentoSistema {
+        - larguraDeBanda: int
+        - emUso: boolean
+        + transportarDado(dado: DadoSessao): void
+        + verificarDisponibilidade(): boolean
+        + liberarVia(): void
+    }
+
+    ' === Relacionamentos Estruturais e Fluxo Lógico ===
+    ' O Fluxo do Periférico Externo
+    MatrizContatos -right-> MicrocontroladorTeclado: "Variação de Tensão"
+    MicrocontroladorTeclado -down-> CaboConexao: "Envia Scancode (USB)"
+    
+    ' A Chegada na Placa-Mãe
+    CaboConexao -down-> PortaFisica: "Pulsos elétricos diferenciais"
+    PortaFisica -right-> ControladorInterface: "Repassa sinais brutos"
+    ControladorInterface -down-> Chipset: "Dado decodificado (Scancode)"
+    
+    ' A Bifurcação de Controle e Dados no Chipset
+    Chipset -left-> APIC: "Dispara alerta de hardware"
+    Chipset -right-> BarramentoSistema: "Conecta via de dados"
+
+    ' Relações de Instanciação e Manipulação da Entidade
+    MicrocontroladorTeclado ..> DadoSessao: "Instancia"
+    CaboConexao ..> DadoSessao: "Transmite"
+    ControladorInterface ..> DadoSessao: "Modifica estado"
+    Chipset ..> DadoSessao: "Armazena"
+    BarramentoSistema ..> DadoSessao: "Transporta"
+
+    ' === Notificações Assíncronas (Event-Driven) ===
+    ' Aqui garantimos que o hardware emite o evento para a rede após suas lógicas
+    MicrocontroladorTeclado ..> EmissorEventos : "emite(JSON)\napós gerarScancode()"
+    ControladorInterface ..> EmissorEventos : "emite(JSON)\napós decodificarPulsos()"
+    APIC ..> EmissorEventos : "emite(JSON)\napós levantarIRQ()"
+
+    note right of MicrocontroladorTeclado
+      Entrada da API: A-Z, 0-9 ou espaço.
+      Mapeamento didático set 1 (make code)
+      conforme o apêndice do ERS; não representa
+      relatório HID USB nem modificadores.
+    end note
+}
+@enduml

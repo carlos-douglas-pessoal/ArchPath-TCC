@@ -1,0 +1,120 @@
+@startuml
+skinparam classAttributeIconSize 0
+skinparam class {
+    BackgroundColor White
+    ArrowColor Black
+    BorderColor Black
+}
+
+package "Módulo 2: Processamento (CPU e Tradução Lógica - Event-Driven)" {
+
+    ' === Camada de Saída de Eventos (Event-Driven) ===
+    class EmissorEventos <<PublicadorDeEventos>> {
+        + emitir(jsonPayload: String): void
+    }
+
+    ' === Classes Externas de Conexão (Barramentos) ===
+    class BarramentoSistema {
+        - larguraDeBanda: int
+        + transportarDado(dado: DadoSessao): void
+    }
+
+    class BarramentoMemoria {
+        - taxaTransferencia: int
+        + transmitirParaRAM(dado: DadoSessao): void
+    }
+
+    class DadoSessao <<Entidade>> {
+    }
+
+    ' === Componentes Físicos Internos da CPU ===
+    class UnidadeControle {
+        - cicloAtual: int
+        - status: String
+        + tratarInterrupcao(): void
+        + buscarScancode(via: BarramentoSistema): DadoSessao
+        + decodificarInstrucao(): void
+        + orquestrarExecucao(): void
+    }
+
+    class ULA {
+        - flagZero: boolean
+        - flagCarry: boolean
+        + executarInstrucao(dado: DadoSessao): void
+    }
+
+    class Registrador {
+        - nome: String
+        - valorArmazenado: String
+        + escrever(valor: String): void
+        + ler(): String
+        + limpar(): void
+    }
+
+    class MemoriaCache {
+        - nivel: String
+        - capacidadeMax: int
+        + gravarTemporario(dado: DadoSessao): void
+        + buscarTemporario(id: String): DadoSessao
+    }
+
+    class IMC <<ControladorMemoria>> {
+        - bufferSaida: Queue<DadoSessao>
+        + despacharParaMemoria(dado: DadoSessao, via: BarramentoMemoria): void
+    }
+
+    ' === Classe Agregadora Principal (Hardware) ===
+    class CPU {
+        - modeloArq: String
+        - clock: int
+        + iniciarCicloClock(): void
+    }
+
+    ' === Software Lógico (Sistema Operacional) ===
+    class DriverTecladoOS <<Software Lógico>> {
+        - mapaTecladoAtivo: String
+        + assumirControle(): void
+        + aplicarMapaTeclado(mapa: String): void
+        + traduzirScancodeParaChar(scancode: DadoSessao): DadoSessao
+        + prepararPacoteRede(dado: DadoSessao): DadoSessao
+    }
+
+    ' === Relacionamentos Estruturais (Composição) ===
+    ' A CPU compõe fisicamente as peças internas
+    CPU *-- "1" UnidadeControle: contém >
+    CPU *-- "1" ULA: contém >
+    CPU *-- "1..*" Registrador: contém >
+    CPU *-- "1..3" MemoriaCache: contém >
+    CPU *-- "1" IMC: contém >
+
+    ' === Fluxo Lógico (A Jornada do Dado e a Tradução) ===
+    BarramentoSistema <.. UnidadeControle: "1. fetch (busca Scancode)"
+    UnidadeControle ..> Registrador: "2. carrega no registrador"
+    
+    ' [Deletar]
+    ' === Registrador <.. DriverTecladoOS: "3. OS assume controle e lê"
+    ' === DriverTecladoOS ..> Registrador: "4. escreve char traduzido"
+    
+    DriverTecladoOS ..> Registrador: "3. OS assume controle e lê\n4. escreve char traduzido"
+    
+    ULA ..> Registrador: "auxilia conversões numéricas"
+    UnidadeControle ..> MemoriaCache: "usa memória rápida"
+    
+    UnidadeControle ..> IMC: "5. instrui IMC a guardar pacote"
+    Registrador ..> IMC: "6. entrega pacote/dado final"
+    IMC ..> BarramentoMemoria: "7. despacha para trilhas de memória"
+
+    ' === Notificações Assíncronas (Event-Driven) ===
+    ' Emissões de eventos disparadas após a conclusão da lógica interna
+    UnidadeControle ..> EmissorEventos : "emite(JSON)\napós buscarScancode() / fetch"
+    DriverTecladoOS ..> EmissorEventos : "emite(JSON)\napós traduzirScancodeParaChar()"
+    
+    note right of Registrador
+      Manipulação Lógica:
+      O dado físico e lógico é manipulado 
+      aqui na memória interna do chip, 
+      mas as notificações de mudança de 
+      estado fluem pelo contrato de eventos.
+    end note
+}
+@enduml

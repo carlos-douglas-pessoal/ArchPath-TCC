@@ -1,0 +1,341 @@
+openapi: 3.0.3
+info:
+  title: ArchPath Simulation API
+  version: 1.0.0
+  description: >
+    API REST para controle de uma simulação single-user mantida em memória.
+    A primeira versão opera em uma única instância/processo em localhost ou
+    rede privada confiável. Comandos usam HTTP; eventos usam SSE.
+servers:
+  - url: http://localhost:8000
+    description: Instância local de desenvolvimento
+paths:
+  /api/simulacao/iniciar:
+    post:
+      summary: Iniciar uma simulação
+      description: >
+        Cria uma nova sessão somente quando não houver sessão ativa. Nunca
+        descarta ou sobrescreve uma sessão ativa. O histórico da execução
+        anterior é liberado ao aceitar o novo início.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InicioRequest'
+            example:
+              tecla_entrada: A
+              cenario_memoria: normal
+      responses:
+        '200':
+          description: Simulação iniciada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InicioResponse'
+        '400':
+          description: Payload inválido, tecla ausente/não suportada ou cenário desconhecido.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Já existe uma simulação ativa.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Falha irrecuperável durante a criação da sessão; nenhuma sessão fica ativa.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/simulacao/pause:
+    post:
+      summary: Pausar a simulação
+      description: >
+        Se RODANDO, permite concluir a transição de componente em curso,
+        suspende antes da próxima e responde somente após chegar a PAUSADO.
+        A resposta confirma sessao_id, sequencia_evento e evento da última
+        transição publicada para sincronização da apresentação no cliente.
+        Se a transição concluir a jornada normalmente ou gerar Page Fault fatal,
+        responde 200 com estado_fsm FINALIZADO (resultado sucesso/erro).
+      responses:
+        '200':
+          description: Pausada ou finalizada durante a transição que a pausa aguardava.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControlResponse'
+        '400':
+          description: Não existe sessão ativa ou a sessão não está RODANDO.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Falha interna irrecuperável durante a transição; o evento terminal é publicado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/simulacao/resume:
+    post:
+      summary: Retomar a simulação
+      description: Só é aceito em PAUSADO.
+      responses:
+        '200':
+          description: Execução contínua retomada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControlResponse'
+        '400':
+          description: Não existe sessão ativa ou a FSM não está PAUSADO.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Falha interna irrecuperável ao alterar o estado; a sessão é finalizada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/simulacao/step:
+    post:
+      summary: Executar uma transição de componente
+      description: >
+        Só é aceito em PAUSADO. A FSM passa por AGUARDANDO_STEP, executa
+        exatamente uma transição completa, publica seu evento e retorna a
+        PAUSADO. A resposta é enviada após a conclusão. Se essa transição
+        finalizar a sessão por Page Fault/erro fatal, retorna estado_fsm
+        FINALIZADO e resultado erro. A resposta inclui o cursor e o evento
+        publicado para sincronização da apresentação.
+      responses:
+        '200':
+          description: Transição concluída ou jornada finalizada durante o passo.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControlResponse'
+        '400':
+          description: Não existe sessão ativa ou a FSM não está PAUSADO.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Falha interna irrecuperável durante a transição; o evento terminal é publicado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/simulacao/status:
+    get:
+      summary: Consultar o estado atual
+      description: Consulta idempotente. FINALIZADO é comunicado pelo evento terminal; depois da limpeza o serviço volta a OCIOSO.
+      responses:
+        '200':
+          description: Há uma simulação ativa.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '404':
+          description: Não há simulação ativa.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IdleResponse'
+  /api/simulacao/eventos:
+    get:
+      summary: Assinar eventos da simulação via SSE
+      description: >
+        Fluxo SSE unidirecional. Cada mensagem tem id
+        `<sessao_id>:<sequencia>` e data JSON conforme Event. O serviço mantém
+        em memória os eventos da sessão atual/última concluída. Sem
+        Last-Event-ID, reproduz a sessão retida desde o primeiro evento.
+        Last-Event-ID correspondente à sessão retida continua após aquele ID;
+        ID inválido ou de sessão anterior reproduz a sessão retida desde o primeiro
+        evento. Após reinício do processo não há replay persistente. Se não
+        houver sessão/eventos retidos, a conexão permanece aberta até surgir
+        evento ou o cliente desconectar.
+      parameters:
+        - in: header
+          name: Last-Event-ID
+          required: false
+          schema:
+            type: string
+            example: 9a6a1d7e-9c30-41e3-a5b6-4e1839a620de:4
+          description: ID SSE recebido anteriormente.
+      responses:
+        '200':
+          description: Fluxo de eventos do servidor.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              examples:
+                transition:
+                  value: |
+                    id: 9a6a1d7e-9c30-41e3-a5b6-4e1839a620de:1
+                    data: {"timestamp":"2026-10-16T11:00:00Z","sessao_id":"9a6a1d7e-9c30-41e3-a5b6-4e1839a620de","status_fsm":"RODANDO","modulo_atual":"I/O","componente_atual":"MicrocontroladorTeclado","tipo_evento":"TRANSICAO","acao_executada":"Scancode gerado","estado_do_dado":{"scancode":"0x1E"}}
+  components:
+    schemas:
+      InicioRequest:
+        type: object
+        additionalProperties: false
+        required:
+          - tecla_entrada
+        properties:
+          tecla_entrada:
+            type: string
+            minLength: 1
+            maxLength: 1
+            pattern: '^[A-Z0-9 ]$'
+            description: Caractere lógico final: letra maiúscula A-Z, algarismo 0-9 ou espaço. O make code set 1 é uma associação didática e o driver preserva a caixa sem simular Shift, outros modificadores, acentos, pontuação ou teclas de função.
+            example: A
+          cenario_memoria:
+            type: string
+            enum:
+              - normal
+              - page_fault
+            default: normal
+      InicioResponse:
+        type: object
+        required:
+          - mensagem
+          - estado_fsm
+          - sessao_id
+          - timestamp_inicio
+        properties:
+          mensagem:
+            type: string
+          estado_fsm:
+            type: string
+            enum:
+              - RODANDO
+          sessao_id:
+            type: string
+            format: uuid
+          timestamp_inicio:
+            type: string
+            format: date-time
+      ControlResponse:
+        type: object
+        description: >
+          pause e step incluem sessao_id, sequencia_evento e evento em conjunto
+          para confirmar a transição publicada. resume omite esses campos.
+        required:
+          - mensagem
+          - estado_fsm
+        properties:
+          mensagem:
+            type: string
+          estado_fsm:
+            type: string
+            enum:
+              - RODANDO
+              - PAUSADO
+              - FINALIZADO
+          resultado:
+            type: string
+            enum:
+              - sucesso
+              - erro
+          sessao_id:
+            type: string
+            format: uuid
+            description: Sessão do evento confirmado por pause ou step.
+          sequencia_evento:
+            type: integer
+            minimum: 1
+            description: Sequência SSE do último evento publicado pelo controle.
+          evento:
+            $ref: '#/components/schemas/Event'
+      StatusResponse:
+        type: object
+        required:
+          - sessao_id
+          - estado_fsm
+          - modulo_atual
+          - componente_atual
+          - timestamp_ultima_acao
+        properties:
+          sessao_id:
+            type: string
+            format: uuid
+          estado_fsm:
+            type: string
+            enum:
+              - RODANDO
+              - PAUSADO
+              - AGUARDANDO_STEP
+          modulo_atual:
+            type: string
+          componente_atual:
+            type: string
+          timestamp_ultima_acao:
+            type: string
+            format: date-time
+      IdleResponse:
+        type: object
+        required:
+          - estado_fsm
+          - mensagem
+        properties:
+          estado_fsm:
+            type: string
+            enum:
+              - OCIOSO
+          mensagem:
+            type: string
+      ErrorResponse:
+        type: object
+        required:
+          - erro
+        properties:
+          erro:
+            type: string
+      Event:
+        type: object
+        additionalProperties: false
+        required:
+          - timestamp
+          - sessao_id
+          - status_fsm
+          - modulo_atual
+          - componente_atual
+          - tipo_evento
+          - acao_executada
+          - estado_do_dado
+        properties:
+          timestamp:
+            type: string
+            format: date-time
+          sessao_id:
+            type: string
+            format: uuid
+          status_fsm:
+            type: string
+            enum:
+              - RODANDO
+              - PAUSADO
+              - FINALIZADO
+          modulo_atual:
+            type: string
+          componente_atual:
+            type: string
+          tipo_evento:
+            type: string
+            enum:
+              - TRANSICAO
+              - ERRO
+              - FINALIZACAO
+          acao_executada:
+            type: string
+          estado_do_dado:
+            type: object
+            description: Snapshot do dado após a ação do componente; propriedades variam por evento.

@@ -1,0 +1,107 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --workers
+      - "1"
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: frontend
+      dockerfile: Dockerfile
+    command:
+      - npm
+      - run
+      - dev
+      - --
+      - --host
+      - 0.0.0.0
+    ports:
+      - "127.0.0.1:5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:5173/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  backend-tests:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    profiles: ["test"]
+    command:
+      - sh
+      - -c
+      - python /opt/archpath/scripts/test_scaffold.py && pytest
+    environment:
+      ARCHPATH_ROOT: /workspace
+      BACKEND_BASE_URL: http://backend:8000
+      FRONTEND_BASE_URL: http://frontend:5173
+    volumes:
+      - ./:/workspace:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+
+  frontend-tests:
+    build:
+      context: frontend
+      dockerfile: Dockerfile
+    profiles: ["test"]
+    command: ["npm", "test", "--", "--run"]
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      frontend:
+        condition: service_healthy
+
+  e2e-tests:
+    build:
+      context: frontend
+      dockerfile: Dockerfile.e2e
+    profiles: ["test"]
+    command: ["npm", "run", "test:e2e"]
+    environment:
+      E2E_BASE_URL: http://frontend:5173
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+    depends_on:
+      frontend:
+        condition: service_healthy
+      backend:
+        condition: service_healthy

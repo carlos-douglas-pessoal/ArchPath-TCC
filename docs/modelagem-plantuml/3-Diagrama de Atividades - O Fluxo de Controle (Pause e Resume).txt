@@ -1,0 +1,65 @@
+@startuml
+skinparam activity {
+    BackgroundColor White
+    BorderColor Black
+    ArrowColor Black
+}
+
+|Frontend|
+start
+:POST /api/simulacao/iniciar\n(tecla_entrada, cenario_memoria?);
+
+|API REST|
+:Validar entrada e adquirir lock atomicamente;
+if (Entrada válida e estado OCIOSO?) then (Sim)
+  :Criar sessao_id e iniciar RODANDO;
+else (Não)
+  :Responder 400 ou 409;\nNão alterar contexto ativo;
+  stop
+endif
+
+|Motor FSM|
+while (Simulação ativa?) is (Sim)
+  if (Estado == PAUSADO?) then (Sim)
+    |Frontend|
+    :Aguardar comando;
+    |API REST|
+    if (Comando == resume?) then (Sim)
+      :Validar PAUSADO;\nDefinir RODANDO;
+    else (step)
+      :Validar PAUSADO;\nDefinir AGUARDANDO_STEP;
+    endif
+    |Motor FSM|
+  else (Não)
+  endif
+
+  if (Estado == RODANDO ou AGUARDANDO_STEP?) then (Sim)
+    :Executar uma transição completa\nde componente;
+    if (Page Fault ou erro fatal?) then (Sim)
+      :Definir FINALIZADO;
+      :Publicar evento ERRO / FINALIZADO;
+      :Liberar recursos e lock;\nRetornar serviço a OCIOSO;
+    else (Não)
+      if (Última transição?) then (Sim)
+        :Definir FINALIZADO;
+        :Publicar evento FINALIZACAO;
+        :Liberar recursos e lock;\nRetornar serviço a OCIOSO;
+      else (Não)
+        if (Pausa solicitada ou step em curso?) then (Sim)
+          :Definir PAUSADO;
+          :Publicar evento da transição\ncom status PAUSADO;
+        else (Não)
+          :Manter estado RODANDO;
+          :Publicar evento da transição\ncom status RODANDO;
+        endif
+      endif
+    endif
+  else (Não)
+  endif
+endwhile (Não)
+
+|Frontend|
+:Consumir SSE ordenado e processar replay\ncom Last-Event-ID;
+:Consultar GET /api/simulacao/status\npara sincronizar estado corrente;
+stop
+@enduml

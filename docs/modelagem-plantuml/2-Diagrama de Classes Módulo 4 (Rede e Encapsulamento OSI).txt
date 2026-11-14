@@ -1,0 +1,132 @@
+@startuml
+skinparam classAttributeIconSize 0
+skinparam class {
+    BackgroundColor White
+    ArrowColor Black
+    BorderColor Black
+}
+
+package "Módulo 4: Rede e OSI (Event-Driven)" {
+
+    ' === Camada de Saída de Eventos (Event-Driven) ===
+    class EmissorEventos <<PublicadorDeEventos>> {
+        + emitir(jsonPayload: String): void
+    }
+
+    ' === Classes Externas ===
+    class BarramentoExpansao {
+        - protocoloAtivo: String
+        + transportarParaRede(dado: DadoSessao): void
+    }
+
+    class ConectorSaida {
+        - tipoInterface: String
+        + transmitirMeioFisico(sinais: String): void
+    }
+
+    class DadoSessao <<Entidade>> {
+        - payload: String
+        - cabecalhos: List<String>
+    }
+
+    ' === Interface Base (Contrato de Camada Event-Driven) ===
+    interface CamadaOSI {
+        + processarPDU(dado: DadoSessao): DadoSessao
+    }
+
+    ' === Pilha de Software (Gerenciada pelo SO) ===
+    class L7_Aplicacao {
+        - protocoloApp: String
+        + processarPDU(dado: DadoSessao): DadoSessao
+        + gerarPayloadBruto(mensagem: String): void
+    }
+
+    class L6_Apresentacao {
+        - formatoCodificacao: String
+        + processarPDU(dado: DadoSessao): DadoSessao
+        + codificarDados(): void
+    }
+
+    class L5_Sessao {
+        - idSessaoRede: String
+        + processarPDU(dado: DadoSessao): DadoSessao
+        + estabelecerComunicacao(): void
+    }
+
+    class L4_Transporte {
+        - portaOrigem: int
+        - portaDestino: int
+        - protocolo: String = "UDP"
+        + processarPDU(dado: DadoSessao): DadoSessao
+        + adicionarCabecalhoUDP(): void
+    }
+
+    class L3_Rede {
+        - ipOrigem: String
+        - ipDestino: String
+        + processarPDU(dado: DadoSessao): DadoSessao
+        + adicionarCabecalhoIP(): void
+    }
+
+    ' === Hardware da Placa de Rede (NIC) ===
+    class ControladorMAC {
+        - macOrigem: String
+        - macDestino: String
+        + processarPDU(dado: DadoSessao): DadoSessao
+        + adicionarMACAddress(): void
+        + empacotarFrameEthernet(): void
+    }
+
+    class SRAM <<Fila FIFO>> {
+        - capacidadeBuffer: int
+        - pacotesProntos: Queue<DadoSessao>
+        + enfileirar(frame: DadoSessao): void
+        + desenfileirar(): DadoSessao
+    }
+
+    class ControladorPHY {
+        - taxaTransmissao: int
+        - tipoSinal: String
+        + processarPDU(dado: DadoSessao): DadoSessao
+        + converterParaBitsSinais(frame: DadoSessao): void
+    }
+
+    ' === Relacionamentos Hierárquicos (Herança/Implementação) ===
+    CamadaOSI <|.. L7_Aplicacao
+    CamadaOSI <|.. L6_Apresentacao
+    CamadaOSI <|.. L5_Sessao
+    CamadaOSI <|.. L4_Transporte
+    CamadaOSI <|.. L3_Rede
+    CamadaOSI <|.. ControladorMAC
+    CamadaOSI <|.. ControladorPHY
+
+    ' === Fluxo Descendente (A Jornada do Dado na Rede) ===
+    BarramentoExpansao ..> L7_Aplicacao: "1. DMA injeta o pacote"
+    L7_Aplicacao --> L6_Apresentacao: "2. repassa"
+    L6_Apresentacao --> L5_Sessao: "3. repassa"
+    L5_Sessao --> L4_Transporte: "4. repassa"
+    L4_Transporte --> L3_Rede: "5. Segmento"
+    L3_Rede --> ControladorMAC: "6. Pacote"
+    
+    ' Hardware L2 e L1
+    ControladorMAC --> SRAM: "7. enfileira Quadro (Frame Ethernet)"
+    SRAM --> ControladorPHY: "8. libera FIFO"
+    ControladorPHY --> ConectorSaida: "9. transmite sinais elétricos"
+
+    ' === Notificações Assíncronas (Event-Driven) ===
+    CamadaOSI ..> EmissorEventos : "emite(JSON)\nno encerramento de processarPDU()"
+    
+    note right of CamadaOSI
+      Contrato Event-Driven:
+      Qualquer classe que implemente 
+      a interface CamadaOSI deve 
+      obrigatoriamente chamar 
+      EmissorEventos.emitir(JSON)
+      antes de devolver o DadoSessao 
+      para a próxima camada.
+      Os valores de endereços, quadro e CRC
+      são ilustrativos; não há transmissão
+      externa nem cálculo bit-exato.
+    end note
+}
+@enduml
